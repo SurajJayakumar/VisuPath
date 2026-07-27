@@ -1,37 +1,112 @@
-# import time
+import multiprocessing
+import asyncio
+import random
+import time
+import queue # for queue.Full exception
+import sys
+import os
 
-# from arduino.app_utils import App
+sys.path.append(os.path.dirname(__file__))
+from board_websocket_client import run_board_client
 
-# print("Hello world!")
+# ----------- IPC QUEUE CONFIG ----------
+QUEUE_SIZE = 3
+# --------------------------------------
+
+# -------- DUMMY DETECTIONS (replace with real model output) ----------
+DUMMY_DETECTIONS = [
+    "Tree detected to your right, 20 feet away",
+    "Car approaching from the left",
+    "Intersection ahead, 30 feet away",
+    "Person walking towards you, 10 feet away",
+    "Dog detected to your right, 8 feet away",
+    "Steps detected ahead, 6 feet away",
+    "Bicycle approaching from behind",
+    "Pothole detected ahead, 3 feet away",
+]
+# ---------------------------------------------------------------------
 
 
-# def loop():
-#     """This function is called repeatedly by the App framework."""
-#     # You can replace this with any code you want your App to run repeatedly.
-#     time.sleep(10)
+
+def enqueue(ipc_queue: multiprocessing.Queue, text: str):
+    """
+    Drop oldest stale message if queue is full.
+    Only keep freshest obstacle alerts for mobility cane.
+    """
+
+    try:
+
+        ipc_queue.put_nowait(text)
+
+    except queue.Full:
+
+        try:
+
+            dropped = ipc_queue.get_nowait()
+            print(f"[Queue] dropped stale: '{dropped}'")
+
+            ipc_queue.put_nowait(text)
+
+        except queue.Empty:
+            pass
+            
+
+def run_inference(ipc_queue: multiprocessing.Queue):
+    """
+    CPU-bound ML inference loop, runs in the main process.
+    Replace random.choice() with the Actual CV computation.
+    """
+
+    print("[Visupath] Starting detection pipeline...")
+
+    while True:
+
+        detection = random.choice(DUMMY_DETECTIONS)
+
+        enqueue(ipc_queue, detection)
+
+        print(f"[Visupath] Queued: {detection}")
+
+        # Remove this sleep when performing real computations.
+        time.sleep(5)
 
 
-# # See: https://docs.arduino.cc/software/app-lab/tutorials/getting-started/#app-run
-# App.run(user_loop=loop)
 
-from arduino.app_utils import App
-from arduino.app_bricks.video_objectdetection import VideoObjectDetection
+def main():
 
-# Initialize detector with custom confidence and debounce settings
-video_detector = VideoObjectDetection(confidence=0.4, debounce_sec=1.5)
+    print("=== VisuPath Starting ===")
 
-# Callback when a "person" is detected (no arguments allowed)
-def on_person_detected():
-    print("🚨 Person detected in the video stream!")
+    # Shared queue between inference process and websocket process
+    ipc_queue = multiprocessing.Queue(QUEUE_SIZE)
 
-video_detector.on_detect("person", on_person_detected)
 
-# Callback for all detections (must take one dict argument)
-def on_all_detections(detections: dict):
-    # Example: {"person": 0.87, "bicycle": 0.66}
-    print("All detections:", detections)
+    # Spawn websocket client sending data to phone as a completely separate OS process
+    # So that kernel can run it in parallel on another core
 
-video_detector.on_detect_all(on_all_detections)
+    board_process = multiprocessing.Process(
+        target = run_board_client,
+        args = (ipc_queue,),
+        daemon = True,
+        name = "BoardWebSocketClient"
+    )
 
-# Run the application (keeps the video detection loop active)
-App.run()
+    board_process.start()
+    print(f"[Visupath] Board Client process started(PID: {board_process.pid})")
+    
+    try:
+    
+        run_inference(ipc_queue)
+    
+    except KeyboardInterrupt:
+        print("[Visupath] Shutting down...")
+    
+    finally:
+        
+        board_process.terminate()
+        board_process.join() # Wait for clean exit
+        print("[Visupath] Board client process stopped.")
+        print("[visupath] Exited cleanly.")
+
+
+if __name__ == "__main__":
+    main()
