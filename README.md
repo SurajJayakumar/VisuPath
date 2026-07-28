@@ -17,14 +17,14 @@ voice alerts on your phone. No screen needed. No hands needed. Just walk.
 
 ## Features
 
-- 🔊 **Voice Alerts** ,Hear what's ahead: "Car approaching, 5 feet away"
-- 📳 **Haptic Feedback** ,Cane vibrates harder and faster as obstacles get closer
-- 🚗 **Speed Awareness** ,Detects if objects are moving fast (car, bike) or slow (person, dog)
-- 🌍 **Panoramic Scene Understanding** ,Builds awareness of everything around you, not just straight ahead
-- 🚦 **Intersection Intelligence** ,Detects if the walk sign says GO or STOP before you step off the curb
-- 🚗 **Turning Car Detection** ,Warns you if a car is turning into your path at a red light
-- 📸 **Fast Sign Reading** ,Quickly identifies traffic signals at low resolution for speed
-- 🐕 **Object Awareness** ,Recognizes trees, people, dogs, cars, chairs, tables, fire hydrants and more
+- 🔊 **Voice Alerts** — Hear what's ahead: "Car approaching, 5 feet away"
+- 📳 **Haptic Feedback** — Cane vibrates harder and faster as obstacles get closer
+- 🚗 **Speed Awareness** — Detects if objects are moving fast (car, bike) or slow (person, dog)
+- 🌍 **Panoramic Scene Understanding** — Builds awareness of everything around you, not just straight ahead
+- 🚦 **Intersection Intelligence** — Detects if the walk sign says GO or STOP before you step off the curb
+- 🚗 **Turning Car Detection** — Warns you if a car is turning into your path at a red light
+- 📸 **Fast Sign Reading** — Quickly identifies traffic signals at low resolution for speed
+- 🐕 **Object Awareness** — Recognizes trees, people, dogs, cars, chairs, tables, fire hydrants and more
 
 ---
 
@@ -130,9 +130,7 @@ ws://<UNO_Q_IP>:8765/tts
 ## Notes
 
 - The current distance wording is based on bounding-box size, not a depth sensor.
-- The Arduino sketch reads the Modulino Distance sensor and prints `TOO_CLOSE`
-  messages when an obstacle is within 700 mm. It also pulses the Modulino Vibro
-  harder as the obstacle gets closer.
-- The Arduino sketch is not yet parsing YOLO alert messages from the Linux side.
+- The Arduino sketch currently tests the vibration motor; it is not yet parsing
+  YOLO alert messages from the Linux side.
 - The WebSocket sender automatically reconnects to the relay when the connection
   drops.
