@@ -130,7 +130,9 @@ ws://<UNO_Q_IP>:8765/tts
 ## Notes
 
 - The current distance wording is based on bounding-box size, not a depth sensor.
-- The Arduino sketch currently tests the vibration motor; it is not yet parsing
-  YOLO alert messages from the Linux side.
+- The Arduino sketch reads the Modulino Distance sensor and prints `TOO_CLOSE`
+  messages when an obstacle is within 700 mm. It also pulses the Modulino Vibro
+  harder as the obstacle gets closer.
+- The Arduino sketch is not yet parsing YOLO alert messages from the Linux side.
 - The WebSocket sender automatically reconnects to the relay when the connection
   drops.
