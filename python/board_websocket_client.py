@@ -78,18 +78,18 @@ async def ws_sender(ipc_queue: multiprocessing.Queue):
         
         except asyncio.CancelledError:
 
-            handle_exception("Cancelled, shutting down cleanly")
+            await handle_exception("Cancelled, shutting down cleanly")
             return
 
         
         except (websockets.exceptions.ConnectionClosedError, OSError) as e:
             
-            handle_exception(f"Connection Error: {e}", RECONNECT_DELAY)
+            await handle_exception(f"Connection Error: {e}", RECONNECT_DELAY)
             
 
         except Exception as e:
 
-            handle_exception(f"Unexpected Error: {e}", RECONNECT_DELAY)
+            await handle_exception(f"Unexpected Error: {e}", RECONNECT_DELAY)
             
 
 

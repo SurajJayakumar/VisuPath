@@ -1,32 +1,15 @@
 import multiprocessing
-import asyncio
-import random
-import time
 import queue # for queue.Full exception
 import sys
 import os
 
 sys.path.append(os.path.dirname(__file__))
 from board_websocket_client import run_board_client
+from object_detector import ObjectDetectionPipeline
 
 # ----------- IPC QUEUE CONFIG ----------
 QUEUE_SIZE = 3
 # --------------------------------------
-
-# -------- DUMMY DETECTIONS (replace with real model output) ----------
-DUMMY_DETECTIONS = [
-    "Tree detected to your right, 20 feet away",
-    "Car approaching from the left",
-    "Intersection ahead, 30 feet away",
-    "Person walking towards you, 10 feet away",
-    "Dog detected to your right, 8 feet away",
-    "Steps detected ahead, 6 feet away",
-    "Bicycle approaching from behind",
-    "Pothole detected ahead, 3 feet away",
-]
-# ---------------------------------------------------------------------
-
-
 
 def enqueue(ipc_queue: multiprocessing.Queue, text: str):
     """
@@ -53,22 +36,15 @@ def enqueue(ipc_queue: multiprocessing.Queue, text: str):
 
 def run_inference(ipc_queue: multiprocessing.Queue):
     """
-    CPU-bound ML inference loop, runs in the main process.
-    Replace random.choice() with the Actual CV computation.
+    CPU-bound object detection loop, runs in the main process.
     """
 
-    print("[Visupath] Starting detection pipeline...")
+    print("[VisuPath] Starting YOLO object detection pipeline...")
+    pipeline = ObjectDetectionPipeline()
 
-    while True:
-
-        detection = random.choice(DUMMY_DETECTIONS)
-
+    for detection in pipeline.alerts():
         enqueue(ipc_queue, detection)
-
-        print(f"[Visupath] Queued: {detection}")
-
-        # Remove this sleep when performing real computations.
-        time.sleep(5)
+        print(f"[VisuPath] Queued: {detection}")
 
 
 
