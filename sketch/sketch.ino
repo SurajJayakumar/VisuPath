@@ -2,39 +2,70 @@
 #include <Modulino.h>
 
 ModulinoVibro vibro;
+ModulinoDistance distance;
+
+const float TOO_CLOSE_MM = 700.0;
+const float CRITICAL_MM = 300.0;
+const unsigned long READ_INTERVAL_MS = 100;
+const unsigned long ALERT_INTERVAL_MS = 1000;
+
+unsigned long lastReadAt = 0;
+unsigned long lastAlertAt = 0;
+bool wasTooClose = false;
+
+int vibrationIntensity(float distanceMm) {
+  if (distanceMm <= CRITICAL_MM) {
+    return MAXIMUM;
+  }
+
+  if (distanceMm >= TOO_CLOSE_MM) {
+    return 0;
+  }
+
+  float closeness = (TOO_CLOSE_MM - distanceMm) / (TOO_CLOSE_MM - CRITICAL_MM);
+  return 120 + int(closeness * (MAXIMUM - 120));
+}
 
 void setup() {
   Bridge.begin();
   Monitor.begin();
   Modulino.begin();
   vibro.begin();
-  Monitor.println("Modulino Vibro Test Started!");
+  distance.begin();
+  Monitor.println("VisuPath distance sensing started.");
 }
 
 void loop() {
-  // --- Test 1: Short buzz (non-blocking) ---
-  // Monitor.println("Buzz: SHORT");
-  // vibro.on(200, 120);        // ON for 200ms, non-blocking
-  // delay(400);
-  // vibro.off();
-  // delay(500);
+  unsigned long now = millis();
+  if (now - lastReadAt < READ_INTERVAL_MS) {
+    return;
+  }
+  lastReadAt = now;
 
-  // --- Test 2: Long buzz (blocking — waits automatically) ---
-  Monitor.println("Buzz: LONG");
-  vibro.on(800, true, MAXIMUM);  // ON for 800ms, blocking (auto-stops)
-  delay(500);
+  float distanceMm = distance.get();
+  if (distanceMm <= 0) {
+    return;
+  }
 
-   // --- Test 2: Long buzz (blocking — waits automatically) ---
-  Monitor.println("Buzz: LONG");
-  vibro.on(800, true, 120);  // ON for 800ms, blocking (auto-stops)
-  delay(500);
+  bool isTooClose = distanceMm <= TOO_CLOSE_MM;
+  if (!isTooClose) {
+    if (wasTooClose) {
+      Monitor.println("CLEAR: obstacle no longer too close");
+    }
+    wasTooClose = false;
+    vibro.off();
+    return;
+  }
 
-  // --- Test 3: Triple pulse ---
-  // Monitor.println("Buzz: TRIPLE PULSE");
-  // for (int i = 0; i < 3; i++) {
-  //   vibro.on(100, true);   // blocking short pulse
-  //   delay(150);
-  // }
+  int intensity = vibrationIntensity(distanceMm);
+  vibro.on(120, false, intensity);
 
-  delay(2000);
+  if (!wasTooClose || now - lastAlertAt >= ALERT_INTERVAL_MS) {
+    Monitor.print("TOO_CLOSE: obstacle ahead, ");
+    Monitor.print(distanceMm);
+    Monitor.println(" mm away");
+    lastAlertAt = now;
+  }
+
+  wasTooClose = true;
 }
