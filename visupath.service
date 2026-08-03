@@ -1,0 +1,17 @@
+[Unit]
+Description=VisuPath
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arduino
+WorkingDirectory=/home/arduino/visupath_python
+ExecStart=/home/arduino/visupath_python/.venv/bin/python3 -u  /home/arduino/visupath_python/main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

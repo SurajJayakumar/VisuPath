@@ -74,15 +74,42 @@ def main():
         run_inference(ipc_queue)
     
     except KeyboardInterrupt:
-        print("[Visupath] Shutting down...")
+        pass
     
     finally:
-        
+        print("[Visupath] Shutting down...")
+        try:
+            ipc_queue.put_nowait(None)  # unblock ipc_queue.get() in board process
+        except Exception:
+            pass
+
         board_process.terminate()
-        board_process.join() # Wait for clean exit
+        board_process.join(timeout=5)
+
+        if board_process.is_alive():
+            print("[VisuPath] Force killing board process.")
+            board_process.kill()
+            board_process.join()
+
         print("[Visupath] Board client process stopped.")
         print("[visupath] Exited cleanly.")
 
 
 if __name__ == "__main__":
     main()
+
+
+# Camera index finding code keep the below code snippet commented
+#import cv2
+#
+#print("Scanning camera indices 0–5...")
+#for idx in range(6):
+#    cap = cv2.VideoCapture(idx)
+#    if cap.isOpened():
+#        ret, frame = cap.read()
+#        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+#        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+#        print(f"  index={idx} | opened=True | read()={ret} | {w}x{h}")
+#        cap.release()
+#    else:
+#        print(f"  index={idx} | opened=False")

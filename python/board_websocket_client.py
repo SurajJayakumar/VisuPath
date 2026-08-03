@@ -72,6 +72,10 @@ async def ws_sender(ipc_queue: multiprocessing.Queue):
                     # bridges blocking queue.get() into async event loop
                     message = await loop.run_in_executor(None, dequeue, ipc_queue)
 
+                    if message is None:  # sentinel parent is shutting down
+                        print("[Websocket Client] Sentinel received, shutting down.")
+                        return
+
                     await websocket.send(message)
                     print(f"[Websocket client] sent: {message}")
 

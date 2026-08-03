@@ -17,14 +17,14 @@ voice alerts on your phone. No screen needed. No hands needed. Just walk.
 
 ## Features
 
-- 🔊 **Voice Alerts** — Hear what's ahead: "Car approaching, 5 feet away"
-- 📳 **Haptic Feedback** — Cane vibrates harder and faster as obstacles get closer
-- 🚗 **Speed Awareness** — Detects if objects are moving fast (car, bike) or slow (person, dog)
-- 🌍 **Panoramic Scene Understanding** — Builds awareness of everything around you, not just straight ahead
-- 🚦 **Intersection Intelligence** — Detects if the walk sign says GO or STOP before you step off the curb
-- 🚗 **Turning Car Detection** — Warns you if a car is turning into your path at a red light
-- 📸 **Fast Sign Reading** — Quickly identifies traffic signals at low resolution for speed
-- 🐕 **Object Awareness** — Recognizes trees, people, dogs, cars, chairs, tables, fire hydrants and more
+- 🔊 **Voice Alerts** ,Hear what's ahead: "Car approaching, 5 feet away"
+- 📳 **Haptic Feedback** ,Cane vibrates harder and faster as obstacles get closer
+- 🚗 **Speed Awareness** ,Detects if objects are moving fast (car, bike) or slow (person, dog)
+- 🌍 **Panoramic Scene Understanding** ,Builds awareness of everything around you, not just straight ahead
+- 🚦 **Intersection Intelligence** ,Detects if the walk sign says GO or STOP before you step off the curb
+- 🚗 **Turning Car Detection** ,Warns you if a car is turning into your path at a red light
+- 📸 **Fast Sign Reading** ,Quickly identifies traffic signals at low resolution for speed
+- 🐕 **Object Awareness** ,Recognizes trees, people, dogs, cars, chairs, tables, fire hydrants and more
 
 ---
 
