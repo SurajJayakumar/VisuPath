@@ -89,11 +89,43 @@ Optional runtime settings:
 export VISUPATH_CAMERA_INDEX=0
 export VISUPATH_ALERT_INTERVAL=1.5
 export VISUPATH_LABELS_PATH=python/coco_labels.txt
+export VISUPATH_CAMERA_HORIZONTAL_FOV_DEG=62
+export VISUPATH_CAMERA_FOCAL_LENGTH_PX=700
+export VISUPATH_DEPTH_ALERT_MIN_M=1.0
 ```
 
 `python/coco_labels.txt` contains the COCO (common objects in context) class names used by the YOLO model.
 The detector uses it to turn numeric class IDs into readable alert text such as
 `person`, `bicycle`, or `car`.
+
+## Camera Depth and Motion
+
+The Python detector estimates object distance from the camera image using a
+monocular pinhole-camera approximation:
+
+```text
+distance_m = real_object_size_m * focal_length_px / bounding_box_size_px
+```
+
+It then tracks detections of the same label across frames and computes radial
+speed from the change in estimated distance over time. Negative radial velocity
+means the object is approaching; positive velocity means it is departing. Alerts
+now include estimated range and motion, for example:
+
+```text
+person detected ahead, 3.4 meters away, approaching at 0.6 meters per second
+```
+
+By default, object alerts prioritize measurable objects at least 1 meter away.
+Set `VISUPATH_DEPTH_ALERT_MIN_M` lower if you want the camera-based alert path to
+also prioritize closer objects. The Modulino Distance sensor remains the better
+source for sub-meter proximity.
+
+For best results, calibrate `VISUPATH_CAMERA_FOCAL_LENGTH_PX` for your camera.
+If it is not set, VisuPath derives an approximate focal length from
+`VISUPATH_CAMERA_HORIZONTAL_FOV_DEG` and the frame width. The built-in object
+size table covers common COCO labels, but exact distance will vary with object
+pose, partial occlusion, and detection-box quality.
 
 ## Install
 
@@ -129,7 +161,8 @@ ws://<UNO_Q_IP>:8765/tts
 
 ## Notes
 
-- The current distance wording is based on bounding-box size, not a depth sensor.
+- Camera distance is monocular object-depth estimation, not a true depth sensor.
+  Calibrate focal length before depending on meter-level accuracy.
 - The Arduino sketch reads the Modulino Distance sensor and prints `TOO_CLOSE`
   messages when an obstacle is within 700 mm. It also pulses the Modulino Vibro
   harder as the obstacle gets closer.

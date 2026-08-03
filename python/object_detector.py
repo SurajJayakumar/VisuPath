@@ -31,6 +31,99 @@ class Detection:
         x1, _, x2, _ = self.box
         return (x1 + x2) / 2
 
+    @property
+    def center_y(self) -> float:
+        _, y1, _, y2 = self.box
+        return (y1 + y2) / 2
+
+    @property
+    def width(self) -> float:
+        x1, _, x2, _ = self.box
+        return max(0.0, x2 - x1)
+
+    @property
+    def height(self) -> float:
+        _, y1, _, y2 = self.box
+        return max(0.0, y2 - y1)
+
+
+@dataclass(frozen=True)
+class DepthEstimate:
+    detection: Detection
+    distance_m: Optional[float]
+    radial_velocity_mps: Optional[float]
+
+    @property
+    def area(self) -> float:
+        return self.detection.area
+
+    @property
+    def label(self) -> str:
+        return self.detection.label
+
+    @property
+    def confidence(self) -> float:
+        return self.detection.confidence
+
+    @property
+    def center_x(self) -> float:
+        return self.detection.center_x
+
+    @property
+    def box(self) -> tuple[float, float, float, float]:
+        return self.detection.box
+
+
+# Approximate physical object dimensions for COCO labels, in meters.
+# These are priors for monocular depth, not guarantees. Calibrate focal length
+# for the target camera and environment before using alerts for safety decisions.
+OBJECT_DIMENSIONS_M = {
+    "person": (0.45, 1.70),
+    "bicycle": (1.70, 1.05),
+    "car": (1.80, 1.50),
+    "motorcycle": (2.10, 1.20),
+    "airplane": (35.0, 12.0),
+    "bus": (2.55, 3.10),
+    "train": (3.00, 4.10),
+    "truck": (2.60, 3.20),
+    "boat": (2.00, 1.50),
+    "traffic light": (0.30, 0.90),
+    "fire hydrant": (0.30, 0.70),
+    "stop sign": (0.75, 0.75),
+    "parking meter": (0.30, 1.40),
+    "bench": (1.50, 0.90),
+    "bird": (0.25, 0.20),
+    "cat": (0.45, 0.30),
+    "dog": (0.75, 0.60),
+    "horse": (2.20, 1.60),
+    "sheep": (1.20, 0.90),
+    "cow": (2.40, 1.50),
+    "elephant": (5.50, 3.20),
+    "bear": (1.40, 1.20),
+    "zebra": (2.40, 1.40),
+    "giraffe": (2.30, 4.80),
+    "backpack": (0.35, 0.50),
+    "umbrella": (1.00, 1.00),
+    "handbag": (0.35, 0.30),
+    "suitcase": (0.45, 0.65),
+    "sports ball": (0.22, 0.22),
+    "skateboard": (0.80, 0.20),
+    "chair": (0.50, 0.90),
+    "couch": (2.00, 0.85),
+    "potted plant": (0.45, 0.80),
+    "bed": (2.00, 0.70),
+    "dining table": (1.50, 0.75),
+    "toilet": (0.40, 0.75),
+    "tv": (1.00, 0.60),
+    "laptop": (0.35, 0.25),
+    "microwave": (0.50, 0.30),
+    "oven": (0.60, 0.60),
+    "sink": (0.55, 0.25),
+    "refrigerator": (0.85, 1.75),
+    "book": (0.20, 0.28),
+    "vase": (0.25, 0.35),
+}
+
 
 def resolve_model_path() -> Path:
     configured = os.getenv("VISUPATH_MODEL_PATH")
@@ -217,12 +310,170 @@ class YoloTfliteDetector:
         return [detections[index] for index in kept]
 
 
+class MonocularDepthTracker:
+    def __init__(
+        self,
+        horizontal_fov_deg: float = 62.0,
+        focal_length_px: Optional[float] = None,
+        max_match_distance_ratio: float = 0.18,
+        smoothing_alpha: float = 0.45,
+        stale_after_s: float = 2.0,
+    ):
+        self.horizontal_fov_deg = horizontal_fov_deg
+        self.configured_focal_length_px = focal_length_px
+        self.max_match_distance_ratio = max_match_distance_ratio
+        self.smoothing_alpha = smoothing_alpha
+        self.stale_after_s = stale_after_s
+        self._tracks: dict[int, dict[str, float | str]] = {}
+        self._next_track_id = 1
+
+    def estimate(
+        self,
+        detections: list[Detection],
+        frame_shape: tuple[int, int, int],
+        timestamp: Optional[float] = None,
+    ) -> list[DepthEstimate]:
+        timestamp = timestamp if timestamp is not None else time.monotonic()
+        self._drop_stale_tracks(timestamp)
+
+        frame_height, frame_width = frame_shape[:2]
+        focal_length_px = self._focal_length_px(frame_width)
+        estimates = []
+        matched_track_ids: set[int] = set()
+
+        for detection in sorted(detections, key=lambda item: item.area, reverse=True):
+            distance_m = self._distance_m(detection, focal_length_px)
+            track_id = self._match_track(detection, frame_width, frame_height, matched_track_ids)
+            radial_velocity_mps = None
+
+            if track_id is not None:
+                track = self._tracks[track_id]
+                previous_distance = track.get("distance_m")
+                previous_timestamp = float(track["timestamp"])
+                dt = max(timestamp - previous_timestamp, 0.001)
+
+                if distance_m is not None and previous_distance is not None:
+                    raw_velocity = (distance_m - float(previous_distance)) / dt
+                    previous_velocity = track.get("radial_velocity_mps")
+                    if previous_velocity is None:
+                        radial_velocity_mps = raw_velocity
+                    else:
+                        radial_velocity_mps = (
+                            self.smoothing_alpha * raw_velocity
+                            + (1.0 - self.smoothing_alpha) * float(previous_velocity)
+                        )
+
+                self._update_track(track_id, detection, timestamp, distance_m, radial_velocity_mps)
+            else:
+                track_id = self._next_track_id
+                self._next_track_id += 1
+                self._update_track(track_id, detection, timestamp, distance_m, None)
+
+            matched_track_ids.add(track_id)
+            estimates.append(DepthEstimate(detection, distance_m, radial_velocity_mps))
+
+        return estimates
+
+    def _focal_length_px(self, frame_width: int) -> float:
+        if self.configured_focal_length_px:
+            return self.configured_focal_length_px
+
+        fov_rad = np.deg2rad(max(1.0, min(self.horizontal_fov_deg, 179.0)))
+        return frame_width / (2.0 * np.tan(fov_rad / 2.0))
+
+    def _distance_m(self, detection: Detection, focal_length_px: float) -> Optional[float]:
+        dimensions = OBJECT_DIMENSIONS_M.get(detection.label)
+        if dimensions is None:
+            dimensions = (
+                float(os.getenv("VISUPATH_DEFAULT_OBJECT_WIDTH_M", "0.5")),
+                float(os.getenv("VISUPATH_DEFAULT_OBJECT_HEIGHT_M", "1.0")),
+            )
+
+        real_width_m, real_height_m = dimensions
+        estimates = []
+        if detection.height >= 6:
+            estimates.append(real_height_m * focal_length_px / detection.height)
+        if detection.width >= 6:
+            estimates.append(real_width_m * focal_length_px / detection.width)
+
+        if not estimates:
+            return None
+
+        return float(np.median(estimates))
+
+    def _match_track(
+        self,
+        detection: Detection,
+        frame_width: int,
+        frame_height: int,
+        matched_track_ids: set[int],
+    ) -> Optional[int]:
+        best_track_id = None
+        best_score = float("inf")
+        max_distance_px = self.max_match_distance_ratio * max(frame_width, frame_height)
+
+        for track_id, track in self._tracks.items():
+            if track_id in matched_track_ids or track["label"] != detection.label:
+                continue
+
+            dx = float(track["center_x"]) - detection.center_x
+            dy = float(track["center_y"]) - detection.center_y
+            center_distance = float(np.hypot(dx, dy))
+            if center_distance > max_distance_px:
+                continue
+
+            area = max(float(track["area"]), detection.area, 1.0)
+            area_change = abs(float(track["area"]) - detection.area) / area
+            score = center_distance + area_change * max_distance_px
+            if score < best_score:
+                best_track_id = track_id
+                best_score = score
+
+        return best_track_id
+
+    def _update_track(
+        self,
+        track_id: int,
+        detection: Detection,
+        timestamp: float,
+        distance_m: Optional[float],
+        radial_velocity_mps: Optional[float],
+    ) -> None:
+        self._tracks[track_id] = {
+            "label": detection.label,
+            "center_x": detection.center_x,
+            "center_y": detection.center_y,
+            "area": detection.area,
+            "timestamp": timestamp,
+            "distance_m": distance_m,
+            "radial_velocity_mps": radial_velocity_mps,
+        }
+
+    def _drop_stale_tracks(self, timestamp: float) -> None:
+        stale_track_ids = [
+            track_id
+            for track_id, track in self._tracks.items()
+            if timestamp - float(track["timestamp"]) > self.stale_after_s
+        ]
+        for track_id in stale_track_ids:
+            del self._tracks[track_id]
+
+
 class ObjectDetectionPipeline:
     def __init__(self):
         labels_path = Path(os.getenv("VISUPATH_LABELS_PATH", Path(__file__).with_name("coco_labels.txt")))
         self.detector = YoloTfliteDetector(labels_path=labels_path)
+        focal_length = os.getenv("VISUPATH_CAMERA_FOCAL_LENGTH_PX")
+        self.depth_tracker = MonocularDepthTracker(
+            horizontal_fov_deg=float(os.getenv("VISUPATH_CAMERA_HORIZONTAL_FOV_DEG", "62")),
+            focal_length_px=float(focal_length) if focal_length else None,
+            max_match_distance_ratio=float(os.getenv("VISUPATH_TRACK_MATCH_DISTANCE_RATIO", "0.18")),
+            smoothing_alpha=float(os.getenv("VISUPATH_SPEED_SMOOTHING_ALPHA", "0.45")),
+            stale_after_s=float(os.getenv("VISUPATH_TRACK_STALE_AFTER", "2.0")),
+        )
         self.camera_index = int(os.getenv("VISUPATH_CAMERA_INDEX", "0"))
         self.alert_interval = float(os.getenv("VISUPATH_ALERT_INTERVAL", "1.5"))
+        self.depth_alert_min_m = float(os.getenv("VISUPATH_DEPTH_ALERT_MIN_M", "1.0"))
         self.last_alert = 0.0
 
     def alerts(self):
@@ -239,23 +490,37 @@ class ObjectDetectionPipeline:
                     continue
 
                 detections = self.detector.detect(frame)
-                alert = self._build_alert(detections, frame.shape)
+                estimates = self.depth_tracker.estimate(detections, frame.shape)
+                alert = self._build_alert(estimates, frame.shape)
                 if alert and time.monotonic() - self.last_alert >= self.alert_interval:
                     self.last_alert = time.monotonic()
                     yield alert
         finally:
             camera.release()
 
-    def _build_alert(self, detections: list[Detection], frame_shape: tuple[int, int, int]) -> Optional[str]:
-        if not detections:
+    def _build_alert(self, estimates: list[DepthEstimate], frame_shape: tuple[int, int, int]) -> Optional[str]:
+        if not estimates:
             return None
 
-        frame_height, frame_width = frame_shape[:2]
-        priority = sorted(detections, key=lambda detection: detection.area, reverse=True)[0]
+        _, frame_width = frame_shape[:2]
+        measurable = [
+            estimate
+            for estimate in estimates
+            if estimate.distance_m is None or estimate.distance_m >= self.depth_alert_min_m
+        ]
+        candidates = measurable or estimates
+        priority = sorted(
+            candidates,
+            key=lambda estimate: (
+                estimate.distance_m if estimate.distance_m is not None else float("inf"),
+                -estimate.area,
+            ),
+        )[0]
         direction = self._direction(priority.center_x, frame_width)
-        distance = self._distance_hint(priority.box, frame_height)
+        distance = self._distance_hint(priority.distance_m)
+        motion = self._motion_hint(priority.radial_velocity_mps)
         confidence = round(priority.confidence * 100)
-        return f"{priority.label} detected {direction}, {distance} ({confidence}% confidence)"
+        return f"{priority.label} detected {direction}, {distance}, {motion} ({confidence}% confidence)"
 
     @staticmethod
     def _direction(center_x: float, frame_width: int) -> str:
@@ -267,11 +532,20 @@ class ObjectDetectionPipeline:
         return "ahead"
 
     @staticmethod
-    def _distance_hint(box: tuple[float, float, float, float], frame_height: int) -> str:
-        _, y1, _, y2 = box
-        height_ratio = (y2 - y1) / max(frame_height, 1)
-        if height_ratio > 0.55:
-            return "very close"
-        if height_ratio > 0.30:
-            return "nearby"
-        return "farther away"
+    def _distance_hint(distance_m: Optional[float]) -> str:
+        if distance_m is None:
+            return "distance unknown"
+        if distance_m < 1.0:
+            return "within 1 meter"
+        if distance_m < 10.0:
+            return f"{distance_m:.1f} meters away"
+        return f"{round(distance_m)} meters away"
+
+    @staticmethod
+    def _motion_hint(radial_velocity_mps: Optional[float]) -> str:
+        if radial_velocity_mps is None or abs(radial_velocity_mps) < 0.15:
+            return "holding steady"
+        speed = abs(radial_velocity_mps)
+        if radial_velocity_mps < 0:
+            return f"approaching at {speed:.1f} meters per second"
+        return f"departing at {speed:.1f} meters per second"
