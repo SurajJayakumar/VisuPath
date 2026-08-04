@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import websockets
 import multiprocessing
+import queue
 import signal
+from dataclasses import dataclass
+from typing import Union
 
 
 # -------- WEBSOCKET CONFIG ----------
@@ -15,26 +20,71 @@ PING_TIMEOUT = 20
 CLOSE_TIMEOUT = 5
 
 # ----------------------------
+# ── Message type bytes ────────────────────────────────────────────────────────
+MSG_TYPE_OBJECT = 0x01   # YOLO object detection text
+MSG_TYPE_SCENE  = 0x02   # VLM scene image (base64)
 
-def handle_sigterm(signum, frame):
+
+
+# --- Dequeue result variants ---
+
+@dataclass(frozen = True)
+class QueueMessage:
+    msg_type: int
+    payload: str
+
+@dataclass(frozen=True)
+class QueueEmpty:
+    pass
+
+@dataclass(frozen=True)
+class QueueShutdown:
+    pass
+
+DequeueResult = Union[QueueMessage, QueueEmpty, QueueShutdown]
+
+
+
+def dequeue_with_priority(
+        object_alert_queue: multiprocessing.Queue,
+        scene_alert_queue: multiprocessing.Queue,
+) -> DequeueResult:
     """
-    SIGTERM handler, cancel all asyncio tasks gracefully
-    instead of dying immediately
+    Check scene_alert_queue (VLM) non-blocking first, then block on
+    object_alert_queue for up to 50ms. Returns typed result — no globals.
     """
-    print("[Websocket Client] SIGTERM received. Shutting down...")
-    loop = asyncio.get_event_loop()
-    for task in asyncio.all_tasks(loop):
-        task.cancel()
+
+    try:
+        msg = scene_alert_queue.get_nowait()
+
+        if msg is None:
+            return QueueShutdown()
+
+        return QueueMessage(msg_type=MSG_TYPE_SCENE, payload=msg)
+
+    except queue.Empty:
+        pass
+
+    try:
+
+        text = object_alert_queue.get(timeout=0.05)
+
+        if text is None:
+            return QueueShutdown()
+
+        return QueueMessage(msg_type=MSG_TYPE_OBJECT, payload=text)
+    
+    except queue.Empty:
+        return QueueEmpty()
 
 
-def dequeue(ipc_queue: multiprocessing.Queue) -> str:
-    """
-    Blocking call that waits until a message is available.
-    """
-    return ipc_queue.get()
+def frame_message(msg_type: int, payload: str) -> bytes:
+    """Prepend 1-byte type prefix. Websocket handles length framing."""
+    return bytes([msg_type]) + payload.encode('utf-8')
 
 
-async def handle_exception(log: str, delay: float = 0):
+
+async def handle_exception(log: str, delay: float = 0) -> None:
     """
     Log error and (optional) sleep non-blocking for some delay
     """
@@ -45,7 +95,7 @@ async def handle_exception(log: str, delay: float = 0):
     
     
 
-async def ws_sender(ipc_queue: multiprocessing.Queue):
+async def ws_sender(object_alert_queue: multiprocessing.Queue, scene_alert_queue: multiprocessing.Queue) -> None:
     """
     Websocket client sending data from a queue to websocket server.
     Attempts reconnection automatically on disconnect
@@ -70,14 +120,20 @@ async def ws_sender(ipc_queue: multiprocessing.Queue):
                 while True:
 
                     # bridges blocking queue.get() into async event loop
-                    message = await loop.run_in_executor(None, dequeue, ipc_queue)
+                    result: DequeueResult = await loop.run_in_executor(None, dequeue_with_priority, object_alert_queue, scene_alert_queue)
 
-                    if message is None:  # sentinel parent is shutting down
-                        print("[Websocket Client] Sentinel received, shutting down.")
-                        return
+                    match result:
 
-                    await websocket.send(message)
-                    print(f"[Websocket client] sent: {message}")
+                        case QueueShutdown():
+                            print("[WebSocket Client] Sentinel received, shutting down.")
+                            return
+
+                        case QueueEmpty():
+                            continue
+
+                        case QueueMessage(msg_type = t, payload = p):
+                            await websocket.send(frame_message(t, p))
+                            print(f"[Websocket client] sent type={t:#04x} len={len(p)}")
 
         
         except asyncio.CancelledError:
@@ -97,7 +153,7 @@ async def ws_sender(ipc_queue: multiprocessing.Queue):
             
 
 
-async def _run_board_client(ipc_queue: multiprocessing.Queue):
+async def _run_board_client(object_alert_queue: multiprocessing.Queue, scene_alert_queue: multiprocessing.Queue) -> None:
     
     loop = asyncio.get_running_loop()
 
@@ -108,11 +164,11 @@ async def _run_board_client(ipc_queue: multiprocessing.Queue):
     
     try:
         
-        await ws_sender(ipc_queue)
+        await ws_sender(object_alert_queue, scene_alert_queue)
         
     except asyncio.CancelledError:
         print("[Websocket Client] Exited Successfully.")
 
 
-def run_board_client(ipc_queue: multiprocessing.Queue):
-    asyncio.run(_run_board_client(ipc_queue))
+def run_board_client(object_alert_queue: multiprocessing.Queue, scene_alert_queue: multiprocessing.Queue) -> None:
+    asyncio.run(_run_board_client(object_alert_queue, scene_alert_queue))

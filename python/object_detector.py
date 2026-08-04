@@ -1,8 +1,9 @@
+import base64
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import cv2
 import numpy as np
@@ -10,16 +11,51 @@ import numpy as np
 # ── Config ────────────────────────────────────────────────────────────────────
 # All tuneable constants — change here rather than in class internals.
 
-VISUPATH_CAMERA_IDX       = 1
+#VISUPATH_CAMERA_IDX       = 1  # not in use — find_camera_index() auto-detects cam index
 VISUPATH_ALERT_INTERVAL_S = 1.5   # minimum seconds between consecutive spoken alerts
 CONFIDENCE_THRESHOLD      = 0.45  # discard any detection below 45 % confidence
 IOU_THRESHOLD             = 0.45  # NMS overlap threshold — higher keeps more overlapping boxes
 GREY_PADDING_COLOR        = 114   # YOLOv8 canonical letterbox fill value (ImageNet mean ≈ 114)
 HIGH_PRIORITY_OBJECTS     = {"traffic light", "stop sign"}  # always reported first if present
 
+VLM_SNAPSHOT_INTERVAL_S = 30
+VLM_SNAPSHOT_WIDTH = 640
+VLM_SNAPSHOT_HEIGHT       = 480
+VLM_SNAPSHOT_JPEG_QUALITY = 75
+
+
 _HERE       = Path(__file__).parent
 MODEL_PATH  = _HERE / "models" / "yolov8_quantized.tflite"
 LABELS_PATH = _HERE / "coco_labels.txt"
+
+
+def find_camera_index(start: int = 0, end: int = 10) -> int:
+    """
+    Scan camera indices [start, end) and return the first index that
+    opens successfully AND returns a valid frame.
+    Skips indices that open but can't read (e.g. metadata nodes like index 1).
+    Raises RuntimeError if no usable camera is found.
+    """
+    print(f"[VisuPath] Scanning camera indices {start}–{end - 1}...")
+    for idx in range(start, end):
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            cap.release()
+            continue
+
+        ok, frame = cap.read()
+        cap.release()
+
+        if ok and frame is not None:
+            print(f"[VisuPath]  Found usable camera at index {idx}")
+            return idx
+
+        print(f"[VisuPath] ⚠️  Index {idx} opened but returned no frame (metadata node?), skipping")
+
+    raise RuntimeError(
+        f"No usable camera found in index range {start}–{end - 1}. "
+        "Check USB connection or extend the scan range."
+    )
 
 
 # Subset of COCO classes relevant to outdoor pedestrian navigation.
@@ -320,12 +356,18 @@ class ObjectDetectionPipeline:
     Wraps YoloTfliteDetector in a camera capture loop and converts detections
     into human-readable alert strings for the TTS layer.
     Alerts are rate-limited by `alert_interval` to avoid repeated announcements.
+
+    Optionally accepts `on_snapshot` callback invoked with a raw base64 JPEG
+    string every VLM_SNAPSHOT_INTERVAL_S seconds. 
     """
 
-    def __init__(self):
+    def __init__(self, on_snapshot: Optional[Callable[[str], None]] = None):
         self.detector       = YoloTfliteDetector()
         self.alert_interval = float(VISUPATH_ALERT_INTERVAL_S)
+        self.camera_idx     = find_camera_index()
         self.last_alert     = 0.0
+        self._on_snapshot = on_snapshot
+        self._last_vlm_snap = 0.0
 
     def alerts(self) -> Iterable[str]:
         """
@@ -333,17 +375,17 @@ class ObjectDetectionPipeline:
         and the rate-limit window has elapsed. Yielded strings are the only values
         that reach the IPC queue; all print() calls go to stdout only.
         """
-        camera = cv2.VideoCapture(VISUPATH_CAMERA_IDX)
+        camera = cv2.VideoCapture(self.camera_idx)
 
         # Buffer size 1 discards stale frames so we always process the most recent one.
         camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if not camera.isOpened():
-            raise RuntimeError(f"Could not open camera index {VISUPATH_CAMERA_IDX}")
+            raise RuntimeError(f"Could not open camera index {self.camera_idx}")
 
         cam_w = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
         cam_h = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"[VisuPath] Camera opened: index={VISUPATH_CAMERA_IDX}  {cam_w}×{cam_h}")
+        print(f"[VisuPath] Camera opened: index={self.camera_idx}  {cam_w}×{cam_h}")
         print(
             f"[VisuPath] Running with "
             f"{self.detector.input_width}×{self.detector.input_height} model input"
@@ -363,6 +405,15 @@ class ObjectDetectionPipeline:
                     continue
 
                 frame_count += 1
+
+                now = time.monotonic() # computed once, reused for both rate-limits
+
+                # VLM snapshot: calls back into main.py
+                if self._on_snapshot is not None and now - self._last_vlm_snap >= VLM_SNAPSHOT_INTERVAL_S:
+                    self._last_vlm_snap = now
+                    self._fire_snapshot(frame)
+
+
                 detections = self.detector.detect(frame)
 
                 # Heartbeat: log throughput and detection count every LOG_INTERVAL frames.
@@ -384,7 +435,7 @@ class ObjectDetectionPipeline:
 
                 # Rate-limited alert — only the yield feeds the IPC queue.
                 alert = self._build_alert(detections, frame.shape)
-                now   = time.monotonic()
+                
                 if alert and now - self.last_alert >= self.alert_interval:
                     self.last_alert = now
                     print(f"[VisuPath] Alert → {alert}")
@@ -397,6 +448,36 @@ class ObjectDetectionPipeline:
                 f"[VisuPath] Camera released after {frame_count} frames "
                 f"({frame_count / max(elapsed, 1e-6):.1f} fps avg)"
             )
+
+    def _fire_snapshot(self, frame: np.ndarray) -> None:
+        """
+        Encode the current frame as a base64 JPEG and invoke on_snapshot.
+        """
+        t0 = time.perf_counter()
+
+        resized = cv2.resize(
+            frame,
+            (VLM_SNAPSHOT_WIDTH, VLM_SNAPSHOT_HEIGHT),
+            interpolation = cv2.INTER_LINEAR,
+        )
+
+        ok, buf = cv2.imencode(
+            ".jpg", resized,
+            [cv2.IMWRITE_JPEG_QUALITY, VLM_SNAPSHOT_JPEG_QUALITY],
+        )
+
+        if not ok:
+            print("[Visupath] VLM snapshot encode failed: skipping")
+            return
+
+        image_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        self._on_snapshot(image_b64) # callback (main.py will put it in the scene_queue to send to phone)
+
+        elapsed_ms = 1000 * (time.perf_counter() - t0)
+
+        print(f"[Visupath] VLM snapshot fired encode={elapsed_ms:.1f}ms payload={len(image_b64)}chars")
+
+
 
     def _build_alert(
         self, detections: list[Detection], frame_shape: tuple
@@ -433,5 +514,5 @@ class ObjectDetectionPipeline:
 
         return (
             f"{best.label} detected {direction}, "
-            f"{distance} ({round(best.confidence * 100)}% confidence)"
+            f"{distance})"
         )
