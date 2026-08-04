@@ -8,7 +8,8 @@ from board_websocket_client import run_board_client
 from object_detector import ObjectDetectionPipeline
 
 # ----------- IPC QUEUE CONFIG ----------
-QUEUE_SIZE = 3
+OBJECT_ALERT_QUEUE_SIZE = 3
+SCENE_ALERT_QUEUE_SIZE = 1
 # --------------------------------------
 
 def enqueue(ipc_queue: multiprocessing.Queue, text: str):
@@ -34,16 +35,32 @@ def enqueue(ipc_queue: multiprocessing.Queue, text: str):
             pass
             
 
-def run_inference(ipc_queue: multiprocessing.Queue):
+def run_inference(object_alert_queue : multiprocessing.Queue, scene_alert_queue: multiprocessing.Queue):
     """
     CPU-bound object detection loop, runs in the main process.
+    Defines _push_snapshot as a closure + callback so ObjectDetectionPipeline can invoke it passing the image for scene explanation
     """
 
+    def _push_snapshot(image_b64: str) -> None:
+        """
+        Drop-on-full snapshot enqueue, only latest scene matters.
+        """
+
+        try:
+            scene_alert_queue.put_nowait(image_b64)
+        except queue.Full:
+            try:
+                scene_alert_queue.get_nowait()
+                scene_alert_queue.put_nowait(image_b64)
+            except queue.Empty:
+                pass
+
+
     print("[VisuPath] Starting YOLO object detection pipeline...")
-    pipeline = ObjectDetectionPipeline()
+    pipeline = ObjectDetectionPipeline(on_snapshot=_push_snapshot)
 
     for detection in pipeline.alerts():
-        enqueue(ipc_queue, detection)
+        enqueue(object_alert_queue, detection)
         print(f"[VisuPath] Queued: {detection}")
 
 
@@ -53,15 +70,15 @@ def main():
     print("=== VisuPath Starting ===")
 
     # Shared queue between inference process and websocket process
-    ipc_queue = multiprocessing.Queue(QUEUE_SIZE)
-
+    object_alert_queue = multiprocessing.Queue(OBJECT_ALERT_QUEUE_SIZE)
+    scene_alert_queue = multiprocessing.Queue(SCENE_ALERT_QUEUE_SIZE)
 
     # Spawn websocket client sending data to phone as a completely separate OS process
     # So that kernel can run it in parallel on another core
 
     board_process = multiprocessing.Process(
         target = run_board_client,
-        args = (ipc_queue,),
+        args = (object_alert_queue, scene_alert_queue),
         daemon = True,
         name = "BoardWebSocketClient"
     )
@@ -71,15 +88,18 @@ def main():
     
     try:
     
-        run_inference(ipc_queue)
+        run_inference(object_alert_queue, scene_alert_queue)
     
     except KeyboardInterrupt:
         pass
     
     finally:
+
         print("[Visupath] Shutting down...")
+        
         try:
-            ipc_queue.put_nowait(None)  # unblock ipc_queue.get() in board process
+            object_alert_queue.put_nowait(None)  # sentinels to unblock the board websocket client
+            scene_alert_queue.put_nowait(None)
         except Exception:
             pass
 
