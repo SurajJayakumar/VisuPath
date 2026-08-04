@@ -62,7 +62,7 @@ def find_camera_index(start: int = 0, end: int = 10) -> int:
 VISUPATH_CLASSES = {
     "person", "bicycle", "car", "motorcycle", "bus", "truck", "train",
     "traffic light", "stop sign", "fire hydrant", "parking meter", "bench",
-    "dog", "cat", "chair", "couch", "bed", "dining table", "tv",
+    "dog", "chair", "couch", "bed", "dining table", "tv",
     "potted plant", "backpack", "suitcase", "microwave", "oven", "sink",
     "refrigerator",
 }
