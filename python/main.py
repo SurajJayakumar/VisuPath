@@ -1,32 +1,15 @@
 import multiprocessing
-import asyncio
-import random
-import time
 import queue # for queue.Full exception
 import sys
 import os
 
 sys.path.append(os.path.dirname(__file__))
 from board_websocket_client import run_board_client
+from object_detector import ObjectDetectionPipeline
 
 # ----------- IPC QUEUE CONFIG ----------
 QUEUE_SIZE = 3
 # --------------------------------------
-
-# -------- DUMMY DETECTIONS (replace with real model output) ----------
-DUMMY_DETECTIONS = [
-    "Tree detected to your right, 20 feet away",
-    "Car approaching from the left",
-    "Intersection ahead, 30 feet away",
-    "Person walking towards you, 10 feet away",
-    "Dog detected to your right, 8 feet away",
-    "Steps detected ahead, 6 feet away",
-    "Bicycle approaching from behind",
-    "Pothole detected ahead, 3 feet away",
-]
-# ---------------------------------------------------------------------
-
-
 
 def enqueue(ipc_queue: multiprocessing.Queue, text: str):
     """
@@ -53,22 +36,15 @@ def enqueue(ipc_queue: multiprocessing.Queue, text: str):
 
 def run_inference(ipc_queue: multiprocessing.Queue):
     """
-    CPU-bound ML inference loop, runs in the main process.
-    Replace random.choice() with the Actual CV computation.
+    CPU-bound object detection loop, runs in the main process.
     """
 
-    print("[Visupath] Starting detection pipeline...")
+    print("[VisuPath] Starting YOLO object detection pipeline...")
+    pipeline = ObjectDetectionPipeline()
 
-    while True:
-
-        detection = random.choice(DUMMY_DETECTIONS)
-
+    for detection in pipeline.alerts():
         enqueue(ipc_queue, detection)
-
-        print(f"[Visupath] Queued: {detection}")
-
-        # Remove this sleep when performing real computations.
-        time.sleep(5)
+        print(f"[VisuPath] Queued: {detection}")
 
 
 
@@ -98,15 +74,42 @@ def main():
         run_inference(ipc_queue)
     
     except KeyboardInterrupt:
-        print("[Visupath] Shutting down...")
+        pass
     
     finally:
-        
+        print("[Visupath] Shutting down...")
+        try:
+            ipc_queue.put_nowait(None)  # unblock ipc_queue.get() in board process
+        except Exception:
+            pass
+
         board_process.terminate()
-        board_process.join() # Wait for clean exit
+        board_process.join(timeout=5)
+
+        if board_process.is_alive():
+            print("[VisuPath] Force killing board process.")
+            board_process.kill()
+            board_process.join()
+
         print("[Visupath] Board client process stopped.")
         print("[visupath] Exited cleanly.")
 
 
 if __name__ == "__main__":
     main()
+
+
+# Camera index finding code keep the below code snippet commented
+#import cv2
+#
+#print("Scanning camera indices 0–5...")
+#for idx in range(6):
+#    cap = cv2.VideoCapture(idx)
+#    if cap.isOpened():
+#        ret, frame = cap.read()
+#        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+#        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+#        print(f"  index={idx} | opened=True | read()={ret} | {w}x{h}")
+#        cap.release()
+#    else:
+#        print(f"  index={idx} | opened=False")

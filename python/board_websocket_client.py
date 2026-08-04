@@ -72,24 +72,28 @@ async def ws_sender(ipc_queue: multiprocessing.Queue):
                     # bridges blocking queue.get() into async event loop
                     message = await loop.run_in_executor(None, dequeue, ipc_queue)
 
+                    if message is None:  # sentinel parent is shutting down
+                        print("[Websocket Client] Sentinel received, shutting down.")
+                        return
+
                     await websocket.send(message)
                     print(f"[Websocket client] sent: {message}")
 
         
         except asyncio.CancelledError:
 
-            handle_exception("Cancelled, shutting down cleanly")
+            await handle_exception("Cancelled, shutting down cleanly")
             return
 
         
         except (websockets.exceptions.ConnectionClosedError, OSError) as e:
             
-            handle_exception(f"Connection Error: {e}", RECONNECT_DELAY)
+            await handle_exception(f"Connection Error: {e}", RECONNECT_DELAY)
             
 
         except Exception as e:
 
-            handle_exception(f"Unexpected Error: {e}", RECONNECT_DELAY)
+            await handle_exception(f"Unexpected Error: {e}", RECONNECT_DELAY)
             
 
 
