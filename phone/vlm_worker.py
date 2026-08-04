@@ -8,7 +8,7 @@ from socket_server import serve_unix_socket, read_lines
 LLAMA_SERVER_URL = "http://127.0.0.1:8080/v1/chat/completions"
 MAX_TOKENS = 80
 TEMPERATURE = 0.1
-INFERENCE_TIMEOUT = 120
+INFERENCE_TIMEOUT = 60
 
 SYSTEM_PROMPT = (
     "You are a navigation assistant for a visually impaired person using a smart cane. "
