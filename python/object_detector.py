@@ -11,14 +11,15 @@ import numpy as np
 # ── Config ────────────────────────────────────────────────────────────────────
 # All tuneable constants — change here rather than in class internals.
 
-#VISUPATH_CAMERA_IDX       = 1  # not in use — find_camera_index() auto-detects cam index
-VISUPATH_ALERT_INTERVAL_S = 1.5   # minimum seconds between consecutive spoken alerts
+#VISUPATH_CAMERA_IDX       = 1  # not in use.find_camera_index() auto-detects cam index
+VISUPATH_ALERT_INTERVAL_S = 7   # minimum seconds between consecutive same alerts (Empirically, TTS takes 3 seconds per detction for full narration)
 CONFIDENCE_THRESHOLD      = 0.45  # discard any detection below 45 % confidence
-IOU_THRESHOLD             = 0.45  # NMS overlap threshold — higher keeps more overlapping boxes
+IOU_THRESHOLD             = 0.45  # NMS overlap threshold. Higher keeps more overlapping boxes
 GREY_PADDING_COLOR        = 114   # YOLOv8 canonical letterbox fill value (ImageNet mean ≈ 114)
 HIGH_PRIORITY_OBJECTS     = {"traffic light", "stop sign"}  # always reported first if present
 
-VLM_SNAPSHOT_INTERVAL_S = 30
+VLM_SNAPSHOT_INTERVAL_S  = 60  # seconds between consecutive snapshots
+VLM_SNAPSHOT_WARMUP_S    = 30   # delay before the very first snapshot after startup
 VLM_SNAPSHOT_WIDTH = 640
 VLM_SNAPSHOT_HEIGHT       = 480
 VLM_SNAPSHOT_JPEG_QUALITY = 75
@@ -365,9 +366,13 @@ class ObjectDetectionPipeline:
         self.detector       = YoloTfliteDetector()
         self.alert_interval = float(VISUPATH_ALERT_INTERVAL_S)
         self.camera_idx     = find_camera_index()
-        self.last_alert     = 0.0
-        self._on_snapshot = on_snapshot
-        self._last_vlm_snap = 0.0
+        self.last_alert       = 0.0
+        self._last_alert_label = ""   # label of the most recently spoken alert
+        self._on_snapshot     = on_snapshot
+        # Offset so the first snapshot fires VLM_SNAPSHOT_WARMUP_S seconds after startup,
+        # then every VLM_SNAPSHOT_INTERVAL_S seconds after that.
+        self._last_vlm_snap = time.monotonic() - (VLM_SNAPSHOT_INTERVAL_S - VLM_SNAPSHOT_WARMUP_S)
+
 
     def alerts(self) -> Iterable[str]:
         """
@@ -433,13 +438,23 @@ class ObjectDetectionPipeline:
                     )
                     print(f"[VisuPath] Detected: {summary}")
 
-                # Rate-limited alert — only the yield feeds the IPC queue.
+                # Alert gate: same label waits alert_interval; different label fires immediately.
                 alert = self._build_alert(detections, frame.shape)
-                
-                if alert and now - self.last_alert >= self.alert_interval:
-                    self.last_alert = now
-                    print(f"[VisuPath] Alert → {alert}")
-                    yield alert
+
+                if alert:
+                    safety = [d for d in detections if d.label in HIGH_PRIORITY_OBJECTS]
+                    best_label = max(safety or detections, key=lambda d: d.area).label
+
+                    if best_label == self._last_alert_label:
+                        if now - self.last_alert >= self.alert_interval:
+                            self.last_alert = now
+                            print(f"[VisuPath] Alert -> {alert}")
+                            yield alert
+                    else:
+                        self.last_alert = now
+                        self._last_alert_label = best_label
+                        print(f"[VisuPath] Alert -> {alert}")
+                        yield alert
 
         finally:
             camera.release()
@@ -514,5 +529,5 @@ class ObjectDetectionPipeline:
 
         return (
             f"{best.label} detected {direction}, "
-            f"{distance})"
+            f"{distance}"
         )
