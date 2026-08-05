@@ -44,7 +44,6 @@ NODE_PID=$!
 
 echo ""
 echo "=== Visupath running ==="
-echo "  llama-server : PID $LLAMA_PID"
 echo "  vlm_worker   : PID $VLM_PID"
 echo "  tts_client   : PID $TTS_PID"
 echo "  server.js    : PID $NODE_PID"
