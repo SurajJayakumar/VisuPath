@@ -1,5 +1,5 @@
 # [VisuPath](https://projecthub.arduino.cc/projects/4d0c2cad-f592-40fe-979d-664cce0d2ea0/preview)
-Video: https://drive.google.com/file/d/1huDNq96GWtDTF3kA3Gq-yAAHunOEd8Zz/view?ts=6a711ce6
+[Visupath Video](https://drive.google.com/file/d/1huDNq96GWtDTF3kA3Gq-yAAHunOEd8Zz/view?usp=sharing)
 <img width="740" height="1125" alt="image" src="https://github.com/user-attachments/assets/4f470c5e-575f-4dfe-8b02-c28f64018a31" />
 <img width="800" height="634" alt="image" src="https://github.com/user-attachments/assets/3d7acfe8-808d-4926-a71b-5805dd5bf8d0" />
 
